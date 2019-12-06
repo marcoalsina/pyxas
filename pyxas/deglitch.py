@@ -13,7 +13,7 @@
 def genesd(data, max_outliers, alpha):
     """Routine to identify outliers from normally-distributed data set.
 
-    Extended summary...
+    Utilizes the generalized extreme Studentized deviate test for outliers to identify indices in an array that correspond to outliers.
 
     Parameters
     ----------
@@ -146,7 +146,7 @@ def rollstd(data, window, min_samples=2, edgemethod='nan'):
     edgemethod : {'nan','calc','extend'}
         Dictates how standard deviation at the edge of the dataset is calculated
         'nan' inserts np.nan values for each point where the window cannot be centered on the analyzed point. 
-        'calc' calculates standard deviation with an abbreviated window at the edges.
+        'calc' calculates standard deviation with an abbreviated window at the edges (e.g. the first sample will have (window/2)+1 points in the calculation).
         'extend' uses the nearest calculated value for the points at the edge of the data.
     Returns
     -------
@@ -155,40 +155,36 @@ def rollstd(data, window, min_samples=2, edgemethod='nan'):
     """
     import numpy as np
 
-    # checking the value of window
     if window%2 == 0:
         raise ValueError('Please choose an odd value for the window length.')
     elif window < 3 or type(window)!=int:
         raise ValueError('Please select an odd integer value of at least 3 for the window length.')
 
-    validEdgeMethods=['nan','extend', 'calc'] #edge method - how do we handle the points at the beginning/end of the data
-    #where one does not yet have a full window to calculate standard deviation?
-    #   nan - just plug in nan for these values
-    #   extend - bring out the values for the first full calculation
-    #   calc - calculate over an incomplete window, e.g. the first sample will have (window/2)+1 points in the calculation
+    validEdgeMethods = ['nan', 'extend', 'calc'] 
+    
     if edgemethod not in validEdgeMethods:
         raise ValueError('Please choose a valid edge method: '+ validEdgeMethods)
 
-    movement=int((window-1)/2) #how many points on either side of the point of interest are included in the window?
-    stddev=[np.nan for point in data]
-    for i, point in enumerate(data[:-movement]):
+    movement=int((window - 1) / 2) #how many points on either side of the point of interest are included in the window?
+    stddev=np.array([np.nan for point in data])
+    for i, point in enumerate(data[ : -movement]):
         if i>=movement:
-            if np.count_nonzero(np.isnan(data[i-movement:i+1+movement])==False)>=min_samples:
-                stddev[i]=np.nanstd(data[i-movement:i+1+movement],ddof=1)
+            if np.count_nonzero(np.isnan(data[i - movement : i + 1 + movement]) == False) >= min_samples:
+                stddev[i]  =   np.nanstd(data[i - movement : i + 1 + movement], ddof=1)
     if edgemethod == 'nan':
         return stddev
-    for i, point in enumerate(data[:movement]):
+    for i, point in enumerate(data[ : movement]):
         if edgemethod == 'calc':
-            if np.count_nonzero(np.isnan(data[0:i+1+movement])==False)>=min_samples:
-                stddev[i]=np.nanstd(data[0:i+1+movement],ddof=1)
+            if np.count_nonzero(np.isnan(data[0 : i + 1 + movement]) == False) >= min_samples:
+                stddev[i]  =   np.nanstd(data[0 : i + 1 + movement], ddof=1)
         if edgemethod == 'extend':
-            stddev[i]=stddev[movement]
-    for i, point in enumerate(data[-movement:]):
+            stddev[i] = stddev[movement]
+    for i, point in enumerate(data[-movement : ]):
         if edgemethod == 'calc':
-            if np.count_nonzero(np.isnan(data[(-2*movement)+i:])==False)>=min_samples:
-                stddev[-movement+i]=np.nanstd(data[(-2*movement)+i:],ddof=1)
+            if np.count_nonzero(np.isnan(data[(-2 * movement) + i : ]) == False)>=min_samples:
+                stddev[-movement + i] = np.nanstd(data[(-2 * movement) + i : ],ddof=1)
         if edgemethod == 'extend':
-            stddev[-movement+i]=stddev[-movement-1]
+            stddev[-movement + i] = stddev[-movement - 1]
    
     return stddev
 
@@ -247,58 +243,60 @@ def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3,
             e_window  = [data.e0+e_val, data.energy[-1]]
     
     index = np.where((data.energy >= e_window[0]) & (data.energy <= e_window[1]))
+    index=index[0]
     
     # creating copies of original data
-    mu    = np.copy(data.norm)   # interpolated values for posterior analysis will be inserted in this 
-    muNan = np.copy(data.norm)   # copy to insert nan values at potential glitches to run the rolling standard deviation
-    ener  = np.copy(data.energy) # copy of energy to create interp1d function without the potential glitches
+    mu      = np.copy(data.norm)   # interpolated values for posterior analysis will be inserted in this 
+    muNan   = np.copy(data.norm)   # copy to insert nan values at potential glitches to run the rolling standard deviation
+    ener    = np.copy(data.energy) # copy of energy to create interp1d function without the potential glitches
 
     # not limited to start:end to ensure data at edges gets best possible fit
     sg_init = savgol_filter(data.norm, sg_window_length, sg_polyorder) 
 
     # computing the difference between normalized spectrum and the savitsky-golay filter
-    res1=data.norm[index]-sg_init[index]
+    res1    = data.norm[index]-sg_init[index]
 
     #If the max is not set to an int, the max will be set to the default of the length of the analyzed data//10
     if type(max_glitches) != int:
-        maxGlitches=len(res1)//10
+        maxGlitches = len(res1)//10
     out1 = genesd(res1, maxGlitches, alpha) #finds outliers in residuals between data and Savitzky-Golay filter
-    if index[0]!=0: #compensates for nonzero starting index
-        out1=out1+index[0]
-    if len(out1)==0: #deglitching ends here if no outliers are found in this first round of analysis
+    if index[0] != 0: #compensates for nonzero starting index
+        out1 = out1 + index[0]
+    if len(out1) == 0: #deglitching ends here if no outliers are found in this first round of analysis
         return
     
-    e2 = np.delete(ener, out1) #removes points that are poorly fitted by the S-G filter
-    n2 = np.delete(mu, out1)
-    f = interp1d(e2, n2, kind='cubic') 
+    e2        = np.delete(ener, out1) #removes points that are poorly fitted by the S-G filter
+    n2        = np.delete(mu, out1)
+    f         = interp1d(e2, n2, kind='cubic') 
     interpPts = f(data.energy[out1]) #interpolates for normalized mu at the removed energies
     
     for i, point in enumerate(out1):
-        mu[point]=interpPts[i] #inserts interpolated points into normalized data
-        muNan[point]=np.nan #inserts nan values at the outlying points to calculate rolling standard deviation 
+        mu[point] = interpPts[i] #inserts interpolated points into normalized data
+        muNan[point] = np.nan #inserts nan values at the outlying points to calculate rolling standard deviation 
             #without influence from the outlying poitns
     
     SG2 = savgol_filter(mu, sg_window_length, sg_polyorder) #fits the normalized absorption with the interpolated points
         #in the place of the outlying points
-    resDev=rollstd(muNan-SG2, sg_window_length, edgemethod='calc') #not limited to start:end ensure best calculation for edge values
+    resDev = rollstd(muNan-SG2, sg_window_length, edgemethod='calc') #not limited to start:end ensure best calculation for edge values
     
     if True in np.isnan(resDev):
-        devcopy=np.copy(resDev)
-        nans=np.where(np.isnan(devcopy))
+        devcopy = np.copy(resDev)
+        nans = np.where(np.isnan(devcopy))
         print('Warning: there are nan values in your residuals standard deviation! Values will be estimated based on nearest values. Try a larger window length to avoid this.')
 
         for nanpoint in nans:
-            newval = np.nanmedian(resDev[nanpoint-sg_window_length:nanpoint+sg_window_length+1])
+            newval = np.nanmedian(resDev[nanpoint - sg_window_length : nanpoint + sg_window_length + 1])
             devcopy[nanpoint] = newval #new median doesn't impact calculations
-        resDev=devcopy
-    res2=(data.norm[index]-SG2[index])/resDev[index] #residuals normalized to rolling standard deviation
+        resDev = devcopy
+    
+    res2 = (data.norm[index] - SG2[index]) / resDev[index] #residuals normalized to rolling standard deviation
     glitches = genesd(res2, maxGlitches, alpha) #by normalizing the standard deviation to the same window as our S-G calculation, 
         #we can tackle the full spectrum, accounting for the noise we expect in the data;
         #as a bonus, with the S-G filter, we ideally have a near-normal distribution of residuals
         #(which makes the generalized ESD a robust method for finding the outliers)
         
-    if index[0]!=0:
-        glitches=glitches+index[0]
+    if index[0] != 0:
+        glitches = glitches + index[0]
     
     dataFilt = deepcopy(data) #non-destructive copy for comparison
     groupDict = group2dict(dataFilt) #transfers data copy to a dictionary (easier to work with)
@@ -315,20 +313,20 @@ def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3,
             for key in dir(data):
                 if type(getattr(data, key)) == np.ndarray or type(getattr(data, key)) == list:
                     if len(getattr(data, key)) == targetLength and key!='energy': #deletes the energy last
-                        glitchDict[data.energy[number]].update({key:groupDict[key][number]})
-                        groupDict[key]=np.delete(groupDict[key],number) #replaces the array with one that removes glitch points
+                        glitchDict[data.energy[number]].update({key : groupDict[key][number]})
+                        groupDict[key] = np.delete(groupDict[key], number) #replaces the array with one that removes glitch points
                         #numpy arrays require extra steps to delete an element (which is why this takes this structure)
                         #removed indices is reversed to avoid changing the length ahead of the removal of points
-            groupDict['energy']=np.delete(groupDict['energy'],number)
+            groupDict['energy'] = np.delete(groupDict['energy'], number)
     
     if glitches is not None:
         if hasattr(data,'glitches'):
             groupDict['glitches'].update(glitchDict)
         else:
-            setattr(data,'glitches',glitchDict)
+            setattr(data,'glitches', glitchDict)
     
     dataKeys = list(groupDict.keys())
     for item in dataKeys:
-        setattr(data,item,groupDict[item])
+        setattr(data, item, groupDict[item])
                 
     return
