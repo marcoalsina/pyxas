@@ -257,8 +257,8 @@ def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3,
     
     #If the max is not set to an int, the max will be set to the default of the length of the analyzed data//10
     if type(max_glitches) != int:
-        maxGlitches = len(res1)//10
-    out1 = genesd(res_norm[index], maxGlitches, alpha) #finds outliers in residuals between data and Savitzky-Golay filter
+        max_glitches = len(res1)//10
+    out1 = genesd(res_norm[index], max_glitches, alpha) #finds outliers in residuals between data and Savitzky-Golay filter
     
     if index[0] != 0: #compensates for nonzero starting index
         out1 = out1 + index[0]
@@ -290,7 +290,7 @@ def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3,
         res_dev2 = devcopy
     
     res2     = (data.norm - sg_final) / res_dev2 #residuals normalized to rolling standard deviation
-    glitches = genesd(res2[index], maxGlitches, alpha) #by normalizing the standard deviation to the same window as our S-G calculation, 
+    glitches = genesd(res2[index], max_glitches, alpha) #by normalizing the standard deviation to the same window as our S-G calculation, 
         #we can tackle the full spectrum, accounting for the noise we expect in the data;
         #as a bonus, with the S-G filter, we ideally have a near-normal distribution of residuals
         #(which makes the generalized ESD a robust method for finding the outliers)
