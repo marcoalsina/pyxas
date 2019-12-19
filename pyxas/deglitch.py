@@ -189,7 +189,7 @@ def rollstd(data, window, min_samples=2, edgemethod='nan'):
     return stddev
 
 def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3, 
-             alpha=.001, max_glitches='Default'):
+             alpha=.025, max_glitches='Default', max_glitch_length=3):
     """Routine to deglitch a XAS spectrum.
 
     This function deglitches points in XAS data through two-step 
@@ -223,7 +223,7 @@ def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3,
     """
     import numpy as np
     from scipy.interpolate import interp1d
-    from scipy.signal import savgol_filter
+    from scipy.signal import savgol_filter, medfilt
     from larch_plugins.utils import group2dict
     from copy import deepcopy
     
@@ -232,11 +232,7 @@ def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3,
     e_windows = ['xas', 'xanes', 'exafs']
     if e_window in e_windows:
         if e_window   =='xas':
-            deglitch(data, e_window='xanes', sg_window_length=sg_window_length,
-                     sg_polyorder=sg_polyorder, alpha=alpha, max_glitches=max_glitches)
-            deglitch(data, e_window='exafs', sg_window_length=sg_window_length,
-                     sg_polyorder=sg_polyorder, alpha=alpha, max_glitches=max_glitches)
-            return
+            e_window  = [data.energy[0], data.energy[-1]]
         elif e_window =='xanes':
             e_window  = [data.energy[0], data.e0+e_val]
         elif e_window =='exafs':
@@ -249,48 +245,52 @@ def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3,
     mu      = np.copy(data.norm)   # interpolated values for posterior analysis will be inserted in this 
     muNan   = np.copy(data.norm)   # copy to insert nan values at potential glitches to run the rolling standard deviation
     ener    = np.copy(data.energy) # copy of energy to create interp1d function without the potential glitches
-
+    
     # not limited to start:end to ensure data at edges gets best possible fit
     sg_init = savgol_filter(data.norm, sg_window_length, sg_polyorder) 
 
     # computing the difference between normalized spectrum and the savitsky-golay filter
-    res1    = data.norm[index]-sg_init[index]
-
+    res1      = data.norm - sg_init
+    res_dev   = rollstd(res1, window=sg_window_length, edgemethod='calc')
+    dev_med   = medfilt(res_dev, 2*(sg_window_length+(max_glitch_length-1))+1)
+    res_norm  = res1 / dev_med
+    
     #If the max is not set to an int, the max will be set to the default of the length of the analyzed data//10
     if type(max_glitches) != int:
         maxGlitches = len(res1)//10
-    out1 = genesd(res1, maxGlitches, alpha) #finds outliers in residuals between data and Savitzky-Golay filter
+    out1 = genesd(res_norm[index], maxGlitches, alpha) #finds outliers in residuals between data and Savitzky-Golay filter
+    
     if index[0] != 0: #compensates for nonzero starting index
         out1 = out1 + index[0]
     if len(out1) == 0: #deglitching ends here if no outliers are found in this first round of analysis
         return
     
-    e2        = np.delete(ener, out1) #removes points that are poorly fitted by the S-G filter
-    n2        = np.delete(mu, out1)
-    f         = interp1d(e2, n2, kind='cubic') 
-    interpPts = f(data.energy[out1]) #interpolates for normalized mu at the removed energies
+    e2         = np.delete(ener, out1) #removes points that are poorly fitted by the S-G filter
+    n2         = np.delete(mu, out1)
+    f          = interp1d(e2, n2, kind='cubic') 
+    interp_pts = f(data.energy[out1]) #interpolates for normalized mu at the removed energies
     
     for i, point in enumerate(out1):
-        mu[point] = interpPts[i] #inserts interpolated points into normalized data
+        mu[point]    = interp_pts[i] #inserts interpolated points into normalized data
         muNan[point] = np.nan #inserts nan values at the outlying points to calculate rolling standard deviation 
             #without influence from the outlying poitns
     
-    SG2 = savgol_filter(mu, sg_window_length, sg_polyorder) #fits the normalized absorption with the interpolated points
+    sg_final = savgol_filter(mu, sg_window_length, sg_polyorder) #fits the normalized absorption with the interpolated points
         #in the place of the outlying points
-    resDev = rollstd(muNan-SG2, sg_window_length, edgemethod='calc') #not limited to start:end ensure best calculation for edge values
+    res_dev2 = rollstd(muNan - sg_final, sg_window_length, edgemethod='calc') #not limited to start:end ensure best calculation for edge values
     
-    if True in np.isnan(resDev):
-        devcopy = np.copy(resDev)
-        nans = np.where(np.isnan(devcopy))
-        print('Warning: there are nan values in your residuals standard deviation! Values will be estimated based on nearest values. Try a larger window length to avoid this.')
-
+    if True in np.isnan(res_dev2):
+        devcopy = np.copy(res_dev2)
+        nans    = np.where(np.isnan(devcopy))
+        print('Warning: there are nan values in your residuals standard deviation! Values will be estimated based on nearby data. Try a larger window length to avoid this.')
+        nans = nans[0]
         for nanpoint in nans:
-            newval = np.nanmedian(resDev[nanpoint - sg_window_length : nanpoint + sg_window_length + 1])
+            newval = np.nanmedian(res_dev2[nanpoint - (sg_window_length+(max_glitch_length-1)) : nanpoint + sg_window_length + max_glitch_length])
             devcopy[nanpoint] = newval #new median doesn't impact calculations
-        resDev = devcopy
+        res_dev2 = devcopy
     
-    res2 = (data.norm[index] - SG2[index]) / resDev[index] #residuals normalized to rolling standard deviation
-    glitches = genesd(res2, maxGlitches, alpha) #by normalizing the standard deviation to the same window as our S-G calculation, 
+    res2     = (data.norm - sg_final) / res_dev2 #residuals normalized to rolling standard deviation
+    glitches = genesd(res2[index], maxGlitches, alpha) #by normalizing the standard deviation to the same window as our S-G calculation, 
         #we can tackle the full spectrum, accounting for the noise we expect in the data;
         #as a bonus, with the S-G filter, we ideally have a near-normal distribution of residuals
         #(which makes the generalized ESD a robust method for finding the outliers)
@@ -298,35 +298,36 @@ def deglitch(data, e_window='xas', sg_window_length=7, sg_polyorder=3,
     if index[0] != 0:
         glitches = glitches + index[0]
     
-    dataFilt = deepcopy(data) #non-destructive copy for comparison
-    groupDict = group2dict(dataFilt) #transfers data copy to a dictionary (easier to work with)
-    
+    data_filt  = deepcopy(data) #non-destructive copy for comparison
+    group_dict = group2dict(data_filt) #transfers data copy to a dictionary (easier to work with)
     
     if len(glitches) == 0:
         glitches=None
     
     else:
-        glitchDict={data.energy[glitch]:{} for glitch in glitches}
+        glitch_dict = {data.energy[glitch] : {} for glitch in glitches}
         for number in sorted(glitches, reverse=True):
             targetLength=len(data.energy) #everything that is of the same length as the energy array will have the indices
                                             #corresponding to glitches removed
             for key in dir(data):
                 if type(getattr(data, key)) == np.ndarray or type(getattr(data, key)) == list:
                     if len(getattr(data, key)) == targetLength and key!='energy': #deletes the energy last
-                        glitchDict[data.energy[number]].update({key : groupDict[key][number]})
-                        groupDict[key] = np.delete(groupDict[key], number) #replaces the array with one that removes glitch points
+                        glitch_dict[data.energy[number]].update({key : group_dict[key][number]})
+                        group_dict[key] = np.delete(group_dict[key], number) #replaces the array with one that removes glitch points
                         #numpy arrays require extra steps to delete an element (which is why this takes this structure)
                         #removed indices is reversed to avoid changing the length ahead of the removal of points
-            groupDict['energy'] = np.delete(groupDict['energy'], number)
+            group_dict['energy'] = np.delete(group_dict['energy'], number)
+            glitch_dict[data.energy[number]].update({'params' : {'e_window':e_window, 'sg_window_length':sg_window_length, 
+                                                                 'sg_polyorder':sg_polyorder, 'alpha':alpha,
+                                                                 'max_glitches':max_glitches, 'max_glitch_length':max_glitch_length}})
     
     if glitches is not None:
         if hasattr(data,'glitches'):
-            groupDict['glitches'].update(glitchDict)
+            group_dict['glitches'].update(glitch_dict)
         else:
-            setattr(data,'glitches', glitchDict)
+            setattr(data,'glitches', glitch_dict)
     
-    dataKeys = list(groupDict.keys())
+    dataKeys = list(group_dict.keys())
     for item in dataKeys:
-        setattr(data, item, groupDict[item])
-                
+        setattr(data, item, group_dict[item])
     return
