@@ -127,21 +127,23 @@ def find_critval(data, alpha):
     return (critval)
 
 
-def rollstd(data, window, min_samples=2, edgemethod='nan'):
-    """Rolling standard deviation calculation.
+def roll_med(data, window, min_samples=2, edgemethod='nan'):
+    """Rolling median calculation, also known as a median filter.
 
-    Ignores nan values and calculates the standard deviation for a moving window.
+    Ignores nan values and calculates the median for a moving window.
     Results are returned in the index corresponding to the center of the window.
-
+    This offers the option of forcing a median calculation even with an abbreviated window
+    and automatically skips nan values.
+    
     Parameters
     ----------
     data : array
-        Array containing the data to perform the analysis.
+        Array containing the data.
     window : odd int
         Size of the rolling window for analysis.
     min_samples: int
-        Minimum samples needed to calculate standard deviation. If the number of datapoints
-        in the window is less than min_samples, np.nan is given as the standard deviation at
+        Minimum samples needed to calculate MAD. If the number of datapoints
+        in the window is less than min_samples, np.nan is given as the MAD at
         that index.
     edgemethod : {'nan','calc','extend'}
         Dictates how standard deviation at the edge of the dataset is calculated
@@ -154,7 +156,8 @@ def rollstd(data, window, min_samples=2, edgemethod='nan'):
         Array with standard deviation found for each point centered in the window.
     """
     import numpy as np
-
+    
+    
     if window%2 == 0:
         raise ValueError('Please choose an odd value for the window length.')
     elif window < 3 or type(window)!=int:
@@ -165,28 +168,28 @@ def rollstd(data, window, min_samples=2, edgemethod='nan'):
     if edgemethod not in validEdgeMethods:
         raise ValueError('Please choose a valid edge method: '+ validEdgeMethods)
 
-    movement=int((window - 1) / 2) #how many points on either side of the point of interest are included in the window?
-    stddev=np.array([np.nan for point in data])
+    movement  = int((window - 1) / 2) #how many points on either side of the point of interest are included in the window?
+    med_array = np.array([np.nan for point in data])
     for i, point in enumerate(data[ : -movement]):
         if i>=movement:
             if np.count_nonzero(np.isnan(data[i - movement : i + 1 + movement]) == False) >= min_samples:
-                stddev[i]  =   np.nanstd(data[i - movement : i + 1 + movement], ddof=1)
+                med_array[i]  =   np.nanmedian(data[i - movement : i + 1 + movement])
     if edgemethod == 'nan':
-        return stddev
+        return med_array
     for i, point in enumerate(data[ : movement]):
         if edgemethod == 'calc':
             if np.count_nonzero(np.isnan(data[0 : i + 1 + movement]) == False) >= min_samples:
-                stddev[i]  =   np.nanstd(data[0 : i + 1 + movement], ddof=1)
+                med_array[i]  =   np.nanmedian(data[0 : i + 1 + movement])
         if edgemethod == 'extend':
-            stddev[i] = stddev[movement]
+            med_array[i] = med_array[movement]
     for i, point in enumerate(data[-movement : ]):
         if edgemethod == 'calc':
-            if np.count_nonzero(np.isnan(data[(-2 * movement) + i : ]) == False)>=min_samples:
-                stddev[-movement + i] = np.nanstd(data[(-2 * movement) + i : ],ddof=1)
+            if np.count_nonzero(np.isnan(data[(-2 * movement) + i : ]) == False) >= min_samples:
+                med_array[-movement + i] = np.nanmedian(data[(-2 * movement) + i : ])
         if edgemethod == 'extend':
-            stddev[-movement + i] = stddev[-movement - 1]
+            med_array[-movement + i] = med_array[-movement - 1]
    
-    return stddev
+    return med_array
 
 def deglitch(energy, mu, group, e_window='xas', sg_window_length=7, sg_polyorder=3, 
              alpha=.025, max_glitches='Default', max_glitch_length=3):
@@ -227,7 +230,7 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=7, sg_polyorder
     """
     import numpy as np
     from scipy.interpolate import interp1d
-    from scipy.signal import savgol_filter, medfilt
+    from scipy.signal import savgol_filter
     from larch_plugins.utils import group2dict
     from copy import deepcopy
     
@@ -254,7 +257,6 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=7, sg_polyorder
     
     # creating copies of original data
     mu_copy = np.copy(mu)   # interpolated values for posterior analysis will be inserted in this 
-    mu_nan  = np.copy(mu)   # copy to insert nan values at potential glitches to run the rolling standard deviation
     ener    = np.copy(energy) # copy of energy to create interp1d function without the potential glitches
     
     # not limited to start:end to ensure data at edges gets best possible fit
@@ -262,9 +264,8 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=7, sg_polyorder
 
     # computing the difference between normalized spectrum and the savitsky-golay filter
     res1      = mu - sg_init
-    res_dev   = rollstd(res1, window=sg_window_length, edgemethod='calc')
-    dev_med   = medfilt(res_dev, 2*(sg_window_length+(max_glitch_length-1))+1)
-    res_norm  = res1 / dev_med
+    roll_mad1 = roll_med(abs(res1), window = 2*(sg_window_length+(max_glitch_length-1))+1, edgemethod='calc')
+    res_norm  = res1 / roll_mad1
     
     #If the max is not set to an int, the max will be set to the default of the length of the analyzed data//10
     if type(max_glitches) != int:
@@ -283,25 +284,13 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=7, sg_polyorder
     
     for i, point in enumerate(out1):
         mu_copy[point] = interp_pts[i] #inserts interpolated points into normalized data
-        mu_nan[point]  = np.nan #inserts nan values at the outlying points to calculate rolling standard deviation 
-            #without influence from the outlying poitns
     
-    sg_final = savgol_filter(mu_copy, sg_window_length, sg_polyorder) #fits the normalized absorption with the interpolated points
-        #in the place of the outlying points
-    res_dev2 = rollstd(mu_nan - sg_final, sg_window_length, edgemethod='calc') #not limited to start:end ensure best calculation for edge values
+    sg_final  = savgol_filter(mu_copy, sg_window_length, sg_polyorder) #fits the normalized absorption with the interpolated points
+    res2      = mu - sg_final
+    roll_mad2 = roll_med(abs(res2), window = 2*(sg_window_length+(max_glitch_length-1))+1, edgemethod='calc')
+    res_norm2 = res2 / roll_mad2
     
-    if True in np.isnan(res_dev2):
-        devcopy = np.copy(res_dev2)
-        nans    = np.where(np.isnan(devcopy))
-        print('Warning: there are nan values in your residuals standard deviation! Values will be estimated based on nearby data. Try a larger window length to avoid this.')
-        nans = nans[0]
-        for nanpoint in nans:
-            newval = np.nanmedian(res_dev2[nanpoint - (sg_window_length+(max_glitch_length-1)) : nanpoint + sg_window_length + max_glitch_length])
-            devcopy[nanpoint] = newval #new median doesn't impact calculations
-        res_dev2 = devcopy
-    
-    res2     = (mu - sg_final) / res_dev2 #residuals normalized to rolling standard deviation
-    glitches = genesd(res2[index], max_glitches, alpha) #by normalizing the standard deviation to the same window as our S-G calculation, 
+    glitches = genesd(res_norm2[index], max_glitches, alpha) #by normalizing the standard deviation to the same window as our S-G calculation, 
         #we can tackle the full spectrum, accounting for the noise we expect in the data;
         #as a bonus, with the S-G filter, we ideally have a near-normal distribution of residuals
         #(which makes the generalized ESD a robust method for finding the outliers)
