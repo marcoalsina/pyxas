@@ -287,16 +287,22 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=7, sg_polyorder
     
     sg_final  = savgol_filter(mu_copy, sg_window_length, sg_polyorder) #fits the normalized absorption with the interpolated points
     res2      = mu - sg_final
-    roll_mad2 = roll_med(abs(res2), window = 2*(sg_window_length+(max_glitch_length-1))+1, edgemethod='calc')
+    roll_mad2 = roll_med(abs(res2), window = (2*max_glitch_length)+1, edgemethod='calc')
     res_norm2 = res2 / roll_mad2
     
-    glitches = genesd(res_norm2[index], max_glitches, alpha) #by normalizing the standard deviation to the same window as our S-G calculation, 
+    glitches_init = genesd(res_norm2[index], max_glitches, alpha)#by normalizing the standard deviation to the same window as our S-G calculation, 
         #we can tackle the full spectrum, accounting for the noise we expect in the data;
         #as a bonus, with the S-G filter, we ideally have a near-normal distribution of residuals
         #(which makes the generalized ESD a robust method for finding the outliers)
-        
     if index[0] != 0:
-        glitches = glitches + index[0]
+        glitches_init = glitches_init + index[0]
+        
+    glitches = np.array([])
+    for glitch in glitches_init:
+        if True in np.where(abs(glitch-out1)<(sg_window_length//2)+1, True, False):
+            glitches = np.append(glitches, glitch)
+    glitches[::-1].sort()
+    glitches = glitches.astype(int)
     
     data_filt  = deepcopy(group) #non-destructive copy for comparison
     group_dict = group2dict(data_filt) #transfers data copy to a dictionary (easier to work with)
@@ -306,7 +312,7 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=7, sg_polyorder
     
     else:
         glitch_dict = {energy[glitch] : {} for glitch in glitches}
-        for number in sorted(glitches, reverse=True):
+        for number in glitches:
             targetLength = len(energy) #everything that is of the same length as the energy array will have the indices
                                             #corresponding to glitches removed
             for key in dir(group):
