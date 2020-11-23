@@ -7,7 +7,7 @@
 ##    genesd
 ##    find_ri
 ##    find_critval
-##    rollstd
+##    roll_med
 ##    deglitch
 
 def genesd(data, max_outliers, alpha):
@@ -191,8 +191,8 @@ def roll_med(data, window, min_samples=2, edgemethod='nan'):
    
     return med_array
 
-def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder=3, 
-             alpha=.025, max_glitches='Default', max_glitch_length=4):
+def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder=4, 
+             alpha=.025, max_glitches='Default', max_glitch_length=3):
     """Routine to deglitch a XAS spectrum.
 
     This function deglitches points in XAS data through two-step 
@@ -200,7 +200,7 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder
     with generalized extreme student deviate test.
 
     This code requires the data group to have at least an energy 
-    and normalized absorption channel.
+    and absorption channel.
 
     Parameters
     ----------
@@ -208,8 +208,8 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder
         Array of the energies of the XAS scan
     mu : array
         Array of the absorption coefficient data
-    group : Larch Group
-        Larch Group to be modified by deglitching procedure
+    group : Araucaria Group
+        Group to be modified by deglitching procedure
     e_window : {'xas', 'xanes', 'exafs', (float, float)}
         'xas' scans the full spectrum.
         'xanes' looks from the beginning up to the edge + 150eV.
@@ -231,7 +231,6 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder
     import numpy as np
     from scipy.interpolate import interp1d
     from scipy.signal import savgol_filter
-    from larch_plugins.utils import group2dict
     from copy import deepcopy
     
     # computing the energy window to perform the deglitch:
@@ -243,9 +242,10 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder
             
         else:
             if 'e0' not in dir(group):
-                from larch_plugins.xafs import pre_edge
-                pre_edge(energy, mu, group=group)
-            e0 = getattr(group, 'e0')
+                from araucaria.xas import find_e0
+                e0 = find_e0(group)
+            else:
+                e0 = getattr(group, 'e0')
             
             if e_window =='xanes':
                 e_window  = [energy[0], e0+e_val]
@@ -299,13 +299,13 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder
         
     glitches = np.array([])
     for glitch in glitches_init:
-        if True in np.where(abs(glitch-out1)<(sg_window_length//2)+1, True, False):
+        if True in np.where(abs(glitch-out1) < (sg_window_length//2) + 1, True, False):
             glitches = np.append(glitches, glitch)
     glitches[::-1].sort()
     glitches = glitches.astype(int)
     
     data_filt  = deepcopy(group) #non-destructive copy for comparison
-    group_dict = group2dict(data_filt) #transfers data copy to a dictionary (easier to work with)
+    group_dict = data_filt.__dict__ #transfers data copy to a dictionary (easier to work with)
     
     if len(glitches) == 0:
         glitches = None
@@ -325,9 +325,14 @@ def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder
                         
             group_dict['energy'] = np.delete(group_dict['energy'], number)
             
-            glitch_dict[energy[number]].update({'params' : {'e_window':e_window, 'sg_window_length':sg_window_length, 
-                                                            'sg_polyorder':sg_polyorder, 'alpha':alpha,
-                                                            'max_glitches':max_glitches, 'max_glitch_length':max_glitch_length}})
+            glitch_dict[energy[number]].update({'params' : {'e_window':e_window,
+                                                            'sg_window_length':sg_window_length, 
+                                                            'sg_polyorder':sg_polyorder,
+                                                            'alpha':alpha,
+                                                            'max_glitches':max_glitches,
+                                                            'max_glitch_length':max_glitch_length
+                                                           }
+                                               })
     
     if glitches is not None:
         if hasattr(group,'glitches'):
