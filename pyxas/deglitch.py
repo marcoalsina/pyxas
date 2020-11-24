@@ -191,8 +191,8 @@ def roll_med(data, window, min_samples=2, edgemethod='nan'):
    
     return med_array
 
-def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder=4, 
-             alpha=.025, max_glitches='Default', max_glitch_length=3):
+def deglitch(energy, mu, group, e_window='xas', sg_window_length=9, sg_polyorder=3, 
+             alpha=.025, max_glitches='Default', max_glitch_length=4):
     """Routine to deglitch a XAS spectrum.
 
     This function deglitches points in XAS data through two-step 
